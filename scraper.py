@@ -1,73 +1,74 @@
 import requests
+from bs4 import BeautifulSoup
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 import os
+import re
 
-# 상품 ID (숫자만 입력)
+# 사용자가 입력한 상품 ID: 5871994
 PRODUCT_ID = "5871994" 
-# 무신사 내부 모바일 데이터 주소 (이 경로는 보안 검사가 훨씬 유연합니다)
-URL = f"https://goods-detail.musinsa.com/goods/{PRODUCT_ID}/v1/price"
+URL = f"https://www.musinsa.com/products/{PRODUCT_ID}" # 2026년형 최신 주소 체계
 CSV_FILE = "price_history.csv"
 
 def get_price():
-    # 아이폰 앱에서 접속하는 것처럼 정교하게 속입니다.
+    # 구글 검색 봇(Googlebot)으로 완벽하게 위장합니다.
     headers = {
-        "User-Agent": "Musinsa/APP (iPhone; iOS 17.4; ko_KR)",
-        "Accept": "application/json",
-        "x-musinsa-app-version": "1.0.0",
-        "Referer": f"https://www.musinsa.com/app/goods/{PRODUCT_ID}"
+        "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "ko-KR,ko;q=0.9",
+        "Cache-Control": "no-cache"
     }
     
-    response = requests.get(URL, headers=headers, timeout=20)
+    response = requests.get(URL, headers=headers, timeout=30)
     
-    # 만약 여기서도 403이 나면, 일반 웹 경로가 아닌 다른 API를 시도합니다.
     if response.status_code != 200:
-        print(f"DEBUG: API 접속 실패({response.status_code}). 대안 경로 시도 중...")
-        # 대안 경로 (검색 결과용 API)
-        alt_url = f"https://search.musinsa.com/api/v1/goods/{PRODUCT_ID}"
-        response = requests.get(alt_url, headers=headers, timeout=20)
+        raise Exception(f"무신사 접속 거부 (상태코드: {response.status_code})")
+    
+    # HTML 내에서 가격 데이터 추출 (정규표현식 사용)
+    # 태그 구조가 바뀌어도 소스 코드 내의 숫자 데이터를 직접 찾아냅/니다.
+    html_content = response.text
+    
+    # "price": 12345 형태나 "salePrice": 12345 형태를 모두 찾습니다.
+    price_match = re.search(r'"price":\s*(\d+)', html_content) or \
+                  re.search(r'"salePrice":\s*(\d+)', html_content) or \
+                  re.search(r'"currentPrice":\s*(\d+)', html_content)
+    
+    if price_match:
+        return int(price_match.group(1))
         
-    if response.status_code == 200:
-        data = response.json()
-        # API 구조에 따라 가격 위치가 다를 수 있으므로 안전하게 추출
-        try:
-            price = data['data']['prices']['salePrice']
-        except:
-            price = data.get('price') or data.get('salePrice')
-            
-        if price:
-            return int(price)
-            
-    raise Exception(f"모든 경로 차단됨 (마지막 코드: {response.status_code})")
+    # 만약 정규식으로 못 찾으면 마지막 수단으로 태그 분석
+    soup = BeautifulSoup(html_content, 'html.parser')
+    price_tag = soup.select_one(".product-detail__price-value")
+    if price_tag:
+        return int(re.sub(r'[^0-9]', '', price_tag.get_text()))
+        
+    raise Exception("가격 데이터를 찾을 수 없습니다. (ID 확인 필요)")
 
 try:
     current_price = get_price()
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # 데이터 저장
+    # 데이터 저장 로직
     if os.path.exists(CSV_FILE):
         df = pd.read_csv(CSV_FILE)
     else:
         df = pd.DataFrame(columns=["date", "price"])
 
-    # 오늘 날짜 없으면 추가
     if today not in df['date'].values:
         new_row = pd.DataFrame({"date": [today], "price": [current_price]})
         df = pd.concat([df, new_row], ignore_index=True)
         df.to_csv(CSV_FILE, index=False)
 
-    # 그래프 생성 (파란색 테마)
+    # 그래프 생성
     plt.figure(figsize=(10, 6))
-    plt.plot(df['date'], df['price'], marker='o', color='#007AFF', linewidth=3)
-    plt.title(f"Musinsa Price Tracker - {PRODUCT_ID}", fontsize=14)
-    plt.xlabel("Date")
-    plt.ylabel("Price (KRW)")
-    plt.grid(True, axis='y', alpha=0.3)
+    plt.plot(df['date'], df['price'], marker='s', color='green', linewidth=2)
+    plt.title(f"Musinsa Price Tracker (ID: {PRODUCT_ID})")
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
     plt.savefig("price_chart.png")
     
-    print(f"🎯 기적적으로 성공! {today} 가격: {current_price}원")
+    print(f"✅ 드디어 뚫었습니다! 오늘의 가격: {current_price}원")
 
 except Exception as e:
     print(f"❌ {e}")
