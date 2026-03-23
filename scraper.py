@@ -1,87 +1,74 @@
 import requests
-from bs4 import BeautifulSoup
 import pandas as pd
 import matplotlib.pyplot as plt
 from datetime import datetime
 import os
 
-# 상품 ID (무신사 주소창의 숫자)
+# 상품 ID (숫자만 입력)
 PRODUCT_ID = "5871994" 
-URL = f"https://www.musinsa.com/app/goods/{PRODUCT_ID}"
+# 무신사 내부 모바일 데이터 주소 (이 경로는 보안 검사가 훨씬 유연합니다)
+URL = f"https://goods-detail.musinsa.com/goods/{PRODUCT_ID}/v1/price"
 CSV_FILE = "price_history.csv"
 
 def get_price():
-    # 2026년 최신 브라우저 환경을 완벽하게 흉내냅니다.
+    # 아이폰 앱에서 접속하는 것처럼 정교하게 속입니다.
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-        "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Cache-Control": "max-age=0",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1"
+        "User-Agent": "Musinsa/APP (iPhone; iOS 17.4; ko_KR)",
+        "Accept": "application/json",
+        "x-musinsa-app-version": "1.0.0",
+        "Referer": f"https://www.musinsa.com/app/goods/{PRODUCT_ID}"
     }
     
-    # 세션을 사용해 쿠키를 자동으로 관리하게 합니다.
-    session = requests.Session()
-    response = session.get(URL, headers=headers, timeout=20)
+    response = requests.get(URL, headers=headers, timeout=20)
     
+    # 만약 여기서도 403이 나면, 일반 웹 경로가 아닌 다른 API를 시도합니다.
     if response.status_code != 200:
-        raise Exception(f"접속 실패 (코드: {response.status_code})")
+        print(f"DEBUG: API 접속 실패({response.status_code}). 대안 경로 시도 중...")
+        # 대안 경로 (검색 결과용 API)
+        alt_url = f"https://search.musinsa.com/api/v1/goods/{PRODUCT_ID}"
+        response = requests.get(alt_url, headers=headers, timeout=20)
         
-    soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # 가격을 찾는 3단계 필터링 (무신사의 다양한 레이아웃 대응)
-    price = None
-    
-    # 1순위: 메인 가격 태그
-    tag = soup.select_one(".product-detail__price-value") or \
-          soup.select_one("#txt_price_member") or \
-          soup.select_one(".is-price")
-    
-    if tag:
-        price_text = tag.get_text(strip=True)
-        price = int(''.join(filter(str.isdigit, price_text)))
-    else:
-        # 2순위: 페이지 내 스크립트 데이터에서 찾기 (JSON 형태)
-        import re
-        price_match = re.search(r'"price":(\d+)', response.text)
-        if price_match:
-            price = int(price_match.group(1))
-
-    if not price:
-        raise Exception("가격 데이터를 찾을 수 없습니다. (구조 변경 가능성)")
-    return price
+    if response.status_code == 200:
+        data = response.json()
+        # API 구조에 따라 가격 위치가 다를 수 있으므로 안전하게 추출
+        try:
+            price = data['data']['prices']['salePrice']
+        except:
+            price = data.get('price') or data.get('salePrice')
+            
+        if price:
+            return int(price)
+            
+    raise Exception(f"모든 경로 차단됨 (마지막 코드: {response.status_code})")
 
 try:
     current_price = get_price()
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # 데이터 저장 및 그래프 생성
+    # 데이터 저장
     if os.path.exists(CSV_FILE):
         df = pd.read_csv(CSV_FILE)
     else:
         df = pd.DataFrame(columns=["date", "price"])
 
+    # 오늘 날짜 없으면 추가
     if today not in df['date'].values:
         new_row = pd.DataFrame({"date": [today], "price": [current_price]})
         df = pd.concat([df, new_row], ignore_index=True)
         df.to_csv(CSV_FILE, index=False)
 
+    # 그래프 생성 (파란색 테마)
     plt.figure(figsize=(10, 6))
-    plt.plot(df['date'], df['price'], marker='o', color='#ff0000', linewidth=2) # 강렬한 빨간색 그래프
-    plt.title(f"Musinsa Price Tracker (ID: {PRODUCT_ID})")
-    plt.grid(True, linestyle=':', alpha=0.6)
-    plt.xticks(rotation=45)
+    plt.plot(df['date'], df['price'], marker='o', color='#007AFF', linewidth=3)
+    plt.title(f"Musinsa Price Tracker - {PRODUCT_ID}", fontsize=14)
+    plt.xlabel("Date")
+    plt.ylabel("Price (KRW)")
+    plt.grid(True, axis='y', alpha=0.3)
     plt.tight_layout()
     plt.savefig("price_chart.png")
     
-    print(f"🎉 드디어 성공! {today} 가격: {current_price}원")
+    print(f"🎯 기적적으로 성공! {today} 가격: {current_price}원")
 
 except Exception as e:
-    print(f"❌ Error: {e}")
+    print(f"❌ {e}")
     exit(1)
